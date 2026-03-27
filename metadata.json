@@ -1,0 +1,5 @@
+{
+  "name": "SocialStream AI - Automated Video Publisher",
+  "description": "Automatically fetch videos from GitHub, generate viral AI captions, and post them to YouTube, Instagram, and Facebook.",
+  "requestFramePermissions": []
+}
