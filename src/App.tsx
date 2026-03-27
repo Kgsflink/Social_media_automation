@@ -31,16 +31,27 @@ interface UserData {
   isVerified: boolean;
   isDisabled: boolean;
   githubToken?: string;
+  youtubeTokens?: string;
+  metaTokens?: string;
   reelsPerBatch?: number;
   uploadSchedule?: string;
   postedVideos?: string;
   createdAt: string;
 }
 
+interface UploadEntry {
+  id: number;
+  videoName: string;
+  platform: string;
+  platformVideoId: string;
+  status: string;
+  timestamp: string;
+}
+
 interface LogEntry {
   id: number;
-  userId: number;
-  message: string;
+  action: string;
+  details: string;
   timestamp: string;
 }
 
@@ -50,7 +61,8 @@ export default function App() {
   const [loading, setLoading] = useState(true);
   const [allUsers, setAllUsers] = useState<UserData[]>([]);
   const [userLogs, setUserLogs] = useState<LogEntry[]>([]);
-  const [activeTab, setActiveTab] = useState<"dashboard" | "settings" | "admin">("dashboard");
+  const [uploads, setUploads] = useState<UploadEntry[]>([]);
+  const [activeTab, setActiveTab] = useState<"dashboard" | "settings" | "admin" | "uploads">("dashboard");
   const [authMode, setAuthMode] = useState<"login" | "register">("login");
 
   useEffect(() => {
@@ -70,6 +82,7 @@ export default function App() {
         const data = await res.json();
         setUserData(data);
         fetchLogs();
+        fetchUploads();
       } else {
         handleLogout();
       }
@@ -88,6 +101,34 @@ export default function App() {
       if (res.ok) {
         const data = await res.json();
         setUserLogs(data);
+      }
+    } catch (err) {
+      console.error(err);
+    }
+  };
+
+  const fetchUploads = async () => {
+    try {
+      const res = await fetch("/api/user/uploads", {
+        headers: { Authorization: `Bearer ${token}` }
+      });
+      if (res.ok) {
+        const data = await res.json();
+        setUploads(data);
+      }
+    } catch (err) {
+      console.error(err);
+    }
+  };
+
+  const deleteUpload = async (id: number) => {
+    try {
+      const res = await fetch(`/api/user/uploads/${id}`, {
+        method: "DELETE",
+        headers: { Authorization: `Bearer ${token}` }
+      });
+      if (res.ok) {
+        fetchUploads();
       }
     } catch (err) {
       console.error(err);
@@ -115,7 +156,31 @@ export default function App() {
     if (activeTab === "dashboard" && token) {
       fetchLogs();
     }
+    if (activeTab === "uploads" && token) {
+      fetchUploads();
+    }
   }, [userData, activeTab, token]);
+
+  const connectSocial = async (platform: "youtube" | "meta") => {
+    try {
+      const res = await fetch(`/api/auth/${platform}/url`, {
+        headers: { Authorization: `Bearer ${token}` }
+      });
+      const { url } = await res.json();
+      const authWindow = window.open(url, "_blank", "width=600,height=700");
+      
+      const handleMessage = (event: MessageEvent) => {
+        if (event.data?.type === 'OAUTH_SUCCESS') {
+          fetchUserData();
+          alert(`${event.data.platform} connected successfully!`);
+          window.removeEventListener('message', handleMessage);
+        }
+      };
+      window.addEventListener('message', handleMessage);
+    } catch (err) {
+      console.error(err);
+    }
+  };
 
   const handleLogin = async (email: string, pass: string) => {
     setLoading(true);
@@ -168,6 +233,7 @@ export default function App() {
     setUserData(null);
     setAllUsers([]);
     setUserLogs([]);
+    setUploads([]);
   };
 
   const updateSettings = async (updates: Partial<UserData>) => {
@@ -236,6 +302,7 @@ export default function App() {
         
         <div className="flex-1 flex flex-col gap-4">
           <NavButton active={activeTab === "dashboard"} onClick={() => setActiveTab("dashboard")} icon={<History size={20} />} />
+          <NavButton active={activeTab === "uploads"} onClick={() => setActiveTab("uploads")} icon={<Layers size={20} />} />
           <NavButton active={activeTab === "settings"} onClick={() => setActiveTab("settings")} icon={<Settings size={20} />} />
           {userData?.role === "admin" && (
             <NavButton active={activeTab === "admin"} onClick={() => setActiveTab("admin")} icon={<ShieldCheck size={20} />} />
@@ -252,6 +319,7 @@ export default function App() {
           <div>
             <h1 className="text-2xl font-bold tracking-tight">
               {activeTab === "dashboard" && "Automation Hub"}
+              {activeTab === "uploads" && "Uploaded Content"}
               {activeTab === "settings" && "System Configuration"}
               {activeTab === "admin" && "Admin Control Center"}
             </h1>
@@ -277,9 +345,14 @@ export default function App() {
                 <DashboardView userData={userData} logs={userLogs} onTrigger={triggerAutomation} />
               </motion.div>
             )}
+            {activeTab === "uploads" && (
+              <motion.div key="uploads" initial={{ opacity: 0, y: 20 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0, y: -20 }}>
+                <UploadsView uploads={uploads} onDelete={deleteUpload} />
+              </motion.div>
+            )}
             {activeTab === "settings" && (
               <motion.div key="settings" initial={{ opacity: 0, y: 20 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0, y: -20 }}>
-                <SettingsView userData={userData} onUpdate={updateSettings} />
+                <SettingsView userData={userData} onUpdate={updateSettings} onConnect={connectSocial} />
               </motion.div>
             )}
             {activeTab === "admin" && userData?.role === "admin" && (
@@ -295,75 +368,88 @@ export default function App() {
 }
 
 function DashboardView({ userData, logs, onTrigger }: { userData: UserData | null, logs: LogEntry[], onTrigger: () => void }) {
-  if (!userData?.isVerified) {
-    return (
-      <div className="bg-orange-500/10 border border-orange-500/20 p-12 rounded-3xl text-center">
-        <ShieldAlert className="mx-auto text-orange-500 mb-4" size={48} />
-        <h2 className="text-2xl font-bold mb-2">Account Pending Verification</h2>
-        <p className="text-white/60 max-w-md mx-auto">
-          Your account is currently under review by the administrator. Automation features will be enabled once your account is verified.
-        </p>
-      </div>
-    );
-  }
-
-  if (userData.isDisabled) {
-    return (
-      <div className="bg-red-500/10 border border-red-500/20 p-12 rounded-3xl text-center">
-        <AlertCircle className="mx-auto text-red-500 mb-4" size={48} />
-        <h2 className="text-2xl font-bold mb-2">Account Disabled</h2>
-        <p className="text-white/60 max-w-md mx-auto">
-          Your account has been disabled by the administrator. Please contact support for more information.
-        </p>
-      </div>
-    );
-  }
-
   return (
-    <div className="grid grid-cols-1 lg:grid-cols-12 gap-8">
-      <div className="lg:col-span-4 space-y-6">
-        <div className="bg-gradient-to-br from-white/10 to-transparent p-8 rounded-3xl border border-white/10">
-          <h3 className="text-lg font-medium mb-4">Quick Actions</h3>
+    <div className="grid grid-cols-1 lg:grid-cols-3 gap-8">
+      <div className="lg:col-span-2 space-y-8">
+        <div className="bg-white/5 rounded-3xl border border-white/10 p-8">
+          <div className="flex justify-between items-center mb-8">
+            <h3 className="text-sm font-mono uppercase tracking-widest text-white/40">Automation Status</h3>
+            <div className="flex items-center gap-2">
+              <span className={`w-2 h-2 rounded-full animate-pulse ${userData?.isVerified && !userData?.isDisabled ? 'bg-green-500' : 'bg-red-500'}`} />
+              <span className="text-xs font-mono">{userData?.isVerified && !userData?.isDisabled ? 'Active' : 'Inactive'}</span>
+            </div>
+          </div>
+          
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+            <div className="p-6 rounded-2xl bg-white/5 border border-white/10">
+              <p className="text-xs text-white/40 mb-1">GitHub Connection</p>
+              <p className="font-medium flex items-center gap-2">
+                {userData?.githubToken ? <CheckCircle2 size={16} className="text-green-500" /> : <AlertCircle size={16} className="text-orange-500" />}
+                {userData?.githubToken ? 'Connected' : 'Not Configured'}
+              </p>
+            </div>
+            <div className="p-6 rounded-2xl bg-white/5 border border-white/10">
+              <p className="text-xs text-white/40 mb-1">Social Accounts</p>
+              <div className="flex gap-3">
+                <Youtube size={16} className={userData?.youtubeTokens ? 'text-red-500' : 'text-white/20'} />
+                <Instagram size={16} className={userData?.metaTokens ? 'text-pink-500' : 'text-white/20'} />
+              </div>
+            </div>
+          </div>
+
           <button 
             onClick={onTrigger}
-            className="w-full py-4 bg-orange-500 hover:bg-orange-600 rounded-2xl font-bold transition-all flex items-center justify-center gap-2 shadow-xl shadow-orange-500/20"
+            disabled={!userData?.isVerified || userData?.isDisabled}
+            className="w-full mt-8 py-4 bg-orange-500 text-white font-bold rounded-2xl hover:bg-orange-600 transition-all disabled:opacity-50 disabled:cursor-not-allowed flex items-center justify-center gap-3"
           >
-            <Play size={20} /> Start Manual Cycle
+            <Play size={20} /> Trigger Manual Batch
           </button>
         </div>
-        
-        <div className="bg-white/5 p-6 rounded-3xl border border-white/10">
-          <h3 className="text-xs font-mono uppercase tracking-widest text-white/40 mb-4">Active Config</h3>
-          <div className="space-y-3">
-            <div className="flex justify-between text-sm">
-              <span className="text-white/40">Batch Size</span>
-              <span className="font-mono">{userData.reelsPerBatch} Reels</span>
-            </div>
-            <div className="flex justify-between text-sm">
-              <span className="text-white/40">Schedule</span>
-              <span className="font-mono">{userData.uploadSchedule}</span>
-            </div>
+
+        <div className="bg-white/5 rounded-3xl border border-white/10 p-8">
+          <h3 className="text-sm font-mono uppercase tracking-widest text-white/40 mb-6 flex items-center gap-2">
+            <Terminal size={14} /> Activity Logs
+          </h3>
+          <div className="space-y-4 max-h-[400px] overflow-y-auto pr-4 custom-scrollbar">
+            {logs.map(log => (
+              <div key={log.id} className="flex gap-4 text-sm border-l border-white/10 pl-4 py-1">
+                <span className="text-white/20 font-mono text-[10px] whitespace-nowrap mt-1">
+                  {new Date(log.timestamp).toLocaleTimeString()}
+                </span>
+                <div>
+                  <p className="font-medium text-white/80">{log.action}</p>
+                  <p className="text-white/40 text-xs">{log.details}</p>
+                </div>
+              </div>
+            ))}
+            {logs.length === 0 && <p className="text-white/20 italic text-sm">No activity recorded yet.</p>}
           </div>
         </div>
       </div>
 
-      <div className="lg:col-span-8">
-        <div className="bg-white/5 rounded-3xl border border-white/10 flex flex-col h-[500px]">
-          <div className="p-6 border-b border-white/10 flex items-center gap-2">
-            <Terminal size={14} className="text-white/40" />
-            <h3 className="text-sm font-mono uppercase tracking-widest text-white/40">Activity Logs</h3>
-          </div>
-          <div className="flex-1 overflow-y-auto p-6 font-mono text-xs space-y-2">
-            {logs.map((log) => (
-              <div key={log.id} className="text-white/60 border-l border-white/10 pl-3 py-1">
-                {log.message}
-              </div>
-            ))}
-            {logs.length === 0 && (
-              <div className="h-full flex items-center justify-center text-white/20 italic">
-                No activity recorded yet.
-              </div>
-            )}
+      <div className="space-y-8">
+        <div className="bg-gradient-to-br from-orange-500/20 to-red-600/20 rounded-3xl border border-orange-500/20 p-8">
+          <ShieldAlert className="text-orange-500 mb-4" size={32} />
+          <h3 className="text-lg font-bold mb-2">Account Verification</h3>
+          <p className="text-sm text-white/60 leading-relaxed">
+            {userData?.isVerified 
+              ? "Your account is fully verified. Automation will run according to your schedule." 
+              : "Your account is currently pending administrator verification. Automation features are restricted."}
+          </p>
+        </div>
+        
+        <div className="bg-white/5 rounded-3xl border border-white/10 p-8">
+          <History className="text-white/40 mb-4" size={32} />
+          <h3 className="text-lg font-bold mb-2">System Info</h3>
+          <div className="space-y-3">
+            <div className="flex justify-between text-xs">
+              <span className="text-white/40">Role</span>
+              <span className="font-mono uppercase">{userData?.role}</span>
+            </div>
+            <div className="flex justify-between text-xs">
+              <span className="text-white/40">Member Since</span>
+              <span className="font-mono">{new Date(userData?.createdAt || "").toLocaleDateString()}</span>
+            </div>
           </div>
         </div>
       </div>
@@ -371,13 +457,89 @@ function DashboardView({ userData, logs, onTrigger }: { userData: UserData | nul
   );
 }
 
-function SettingsView({ userData, onUpdate }: { userData: UserData | null, onUpdate: (u: Partial<UserData>) => void }) {
+function UploadsView({ uploads, onDelete }: { uploads: UploadEntry[], onDelete: (id: number) => void }) {
+  return (
+    <div className="bg-white/5 rounded-3xl border border-white/10 overflow-hidden">
+      <table className="w-full text-left">
+        <thead>
+          <tr className="border-b border-white/10 text-[10px] font-mono uppercase tracking-widest text-white/40">
+            <th className="p-6">Video Name</th>
+            <th className="p-6">Platform</th>
+            <th className="p-6">Video ID</th>
+            <th className="p-6">Date</th>
+            <th className="p-6 text-right">Actions</th>
+          </tr>
+        </thead>
+        <tbody className="divide-y divide-white/5">
+          {uploads.map(u => (
+            <tr key={u.id} className="hover:bg-white/5 transition-colors">
+              <td className="p-6 font-medium text-sm">{u.videoName}</td>
+              <td className="p-6">
+                <div className="flex items-center gap-2">
+                  {u.platform === 'youtube' && <Youtube size={16} className="text-red-500" />}
+                  {u.platform === 'instagram' && <Instagram size={16} className="text-pink-500" />}
+                  <span className="capitalize text-xs">{u.platform}</span>
+                </div>
+              </td>
+              <td className="p-6 font-mono text-xs text-white/40">{u.platformVideoId}</td>
+              <td className="p-6 text-xs text-white/40">{new Date(u.timestamp).toLocaleDateString()}</td>
+              <td className="p-6 text-right">
+                <button 
+                  onClick={() => onDelete(u.id)}
+                  className="text-xs text-red-500 hover:text-red-400 transition-colors"
+                >
+                  Delete Record
+                </button>
+              </td>
+            </tr>
+          ))}
+          {uploads.length === 0 && (
+            <tr>
+              <td colSpan={5} className="p-12 text-center text-white/20 italic">
+                No videos uploaded yet.
+              </td>
+            </tr>
+          )}
+        </tbody>
+      </table>
+    </div>
+  );
+}
+
+function SettingsView({ userData, onUpdate, onConnect }: { userData: UserData | null, onUpdate: (u: Partial<UserData>) => void, onConnect: (p: "youtube" | "meta") => void }) {
   const [github, setGithub] = useState(userData?.githubToken || "");
   const [batch, setBatch] = useState(userData?.reelsPerBatch || 2);
   const [schedule, setSchedule] = useState(userData?.uploadSchedule || "0 */6 * * *");
 
   return (
-    <div className="max-w-2xl space-y-8">
+    <div className="max-w-2xl space-y-12">
+      <section className="space-y-6">
+        <h3 className="text-sm font-mono uppercase tracking-widest text-white/40">Social Integrations</h3>
+        <div className="grid grid-cols-2 gap-4">
+          <button 
+            onClick={() => onConnect("youtube")}
+            className={`flex items-center justify-between p-4 rounded-2xl border transition-all ${userData?.youtubeTokens ? 'border-red-500/50 bg-red-500/5' : 'border-white/10 bg-white/5 hover:border-red-500/50'}`}
+          >
+            <div className="flex items-center gap-3">
+              <Youtube className={userData?.youtubeTokens ? 'text-red-500' : 'text-white/40'} />
+              <span className="font-medium">YouTube</span>
+            </div>
+            {userData?.youtubeTokens ? <CheckCircle2 size={16} className="text-red-500" /> : <span className="text-[10px] font-mono uppercase text-white/40">Connect</span>}
+          </button>
+          
+          <button 
+            onClick={() => onConnect("meta")}
+            className={`flex items-center justify-between p-4 rounded-2xl border transition-all ${userData?.metaTokens ? 'border-pink-500/50 bg-pink-500/5' : 'border-white/10 bg-white/5 hover:border-pink-500/50'}`}
+          >
+            <div className="flex items-center gap-3">
+              <Instagram className={userData?.metaTokens ? 'text-pink-500' : 'text-white/40'} />
+              <span className="font-medium">Instagram</span>
+            </div>
+            {userData?.metaTokens ? <CheckCircle2 size={16} className="text-pink-500" /> : <span className="text-[10px] font-mono uppercase text-white/40">Connect</span>}
+          </button>
+        </div>
+      </section>
+
       <section className="space-y-4">
         <h3 className="text-sm font-mono uppercase tracking-widest text-white/40 flex items-center gap-2">
           <Github size={14} /> GitHub Integration
