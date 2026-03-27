@@ -1,4 +1,4 @@
-import { useState, useEffect } from "react";
+import { useState, useEffect, FormEvent } from "react";
 import { 
   Play, 
   Settings, 
@@ -16,127 +16,215 @@ import {
   ShieldCheck,
   Clock,
   Layers,
-  ShieldAlert
+  ShieldAlert,
+  Key,
+  Mail,
+  Lock
 } from "lucide-react";
 import { motion, AnimatePresence } from "motion/react";
-import { 
-  auth, 
-  db, 
-  googleProvider, 
-  signInWithPopup, 
-  signOut, 
-  onAuthStateChanged, 
-  doc, 
-  getDoc, 
-  setDoc, 
-  updateDoc, 
-  onSnapshot,
-  collection,
-  query,
-  where,
-  getDocs,
-  User
-} from "./firebase";
 
 interface UserData {
-  uid: string;
+  id: number;
   email: string;
   displayName: string;
-  photoURL: string;
+  role: "user" | "admin";
   isVerified: boolean;
   isDisabled: boolean;
-  role: "user" | "admin";
   githubToken?: string;
   reelsPerBatch?: number;
   uploadSchedule?: string;
-  postedVideos?: string[];
-  logs?: string[];
+  postedVideos?: string;
+  createdAt: string;
+}
+
+interface LogEntry {
+  id: number;
+  userId: number;
+  message: string;
+  timestamp: string;
 }
 
 export default function App() {
-  const [user, setUser] = useState<User | null>(null);
+  const [token, setToken] = useState<string | null>(localStorage.getItem("token"));
   const [userData, setUserData] = useState<UserData | null>(null);
   const [loading, setLoading] = useState(true);
   const [allUsers, setAllUsers] = useState<UserData[]>([]);
+  const [userLogs, setUserLogs] = useState<LogEntry[]>([]);
   const [activeTab, setActiveTab] = useState<"dashboard" | "settings" | "admin">("dashboard");
+  const [authMode, setAuthMode] = useState<"login" | "register">("login");
 
   useEffect(() => {
-    const unsubscribe = onAuthStateChanged(auth, async (currentUser) => {
-      setUser(currentUser);
-      if (currentUser) {
-        // Sync user data
-        const userRef = doc(db, "users", currentUser.uid);
-        const userSnap = await getDoc(userRef);
-        
-        if (!userSnap.exists()) {
-          const newData: UserData = {
-            uid: currentUser.uid,
-            email: currentUser.email || "",
-            displayName: currentUser.displayName || "",
-            photoURL: currentUser.photoURL || "",
-            isVerified: false,
-            isDisabled: false,
-            role: currentUser.email === "gopig4974@gmail.com" ? "admin" : "user", // Default admin
-            reelsPerBatch: 2,
-            uploadSchedule: "0 */6 * * *",
-            postedVideos: [],
-            logs: []
-          };
-          await setDoc(userRef, newData);
-          setUserData(newData);
-        }
-
-        // Listen for real-time updates
-        onSnapshot(userRef, (doc) => {
-          setUserData(doc.data() as UserData);
-        });
-      } else {
-        setUserData(null);
-      }
+    if (token) {
+      fetchUserData();
+    } else {
       setLoading(false);
-    });
-    return () => unsubscribe();
-  }, []);
-
-  // Admin: Fetch all users
-  useEffect(() => {
-    if (userData?.role === "admin" && activeTab === "admin") {
-      const q = query(collection(db, "users"));
-      const unsubscribe = onSnapshot(q, (snapshot) => {
-        const users = snapshot.docs.map(doc => doc.data() as UserData);
-        setAllUsers(users);
-      });
-      return () => unsubscribe();
     }
-  }, [userData, activeTab]);
+  }, [token]);
 
-  const handleLogin = () => signInWithPopup(auth, googleProvider);
-  const handleLogout = () => signOut(auth);
-
-  const updateSettings = async (updates: Partial<UserData>) => {
-    if (!user) return;
-    await updateDoc(doc(db, "users", user.uid), updates);
+  const fetchUserData = async () => {
+    try {
+      const res = await fetch("/api/auth/me", {
+        headers: { Authorization: `Bearer ${token}` }
+      });
+      if (res.ok) {
+        const data = await res.json();
+        setUserData(data);
+        fetchLogs();
+      } else {
+        handleLogout();
+      }
+    } catch (err) {
+      console.error(err);
+    } finally {
+      setLoading(false);
+    }
   };
 
-  const toggleUserStatus = async (targetUid: string, field: "isVerified" | "isDisabled", value: boolean) => {
-    await updateDoc(doc(db, "users", targetUid), { [field]: value });
+  const fetchLogs = async () => {
+    try {
+      const res = await fetch("/api/user/logs", {
+        headers: { Authorization: `Bearer ${token}` }
+      });
+      if (res.ok) {
+        const data = await res.json();
+        setUserLogs(data);
+      }
+    } catch (err) {
+      console.error(err);
+    }
+  };
+
+  const fetchAllUsers = async () => {
+    try {
+      const res = await fetch("/api/admin/users", {
+        headers: { Authorization: `Bearer ${token}` }
+      });
+      if (res.ok) {
+        const data = await res.json();
+        setAllUsers(data);
+      }
+    } catch (err) {
+      console.error(err);
+    }
+  };
+
+  useEffect(() => {
+    if (userData?.role === "admin" && activeTab === "admin") {
+      fetchAllUsers();
+    }
+    if (activeTab === "dashboard" && token) {
+      fetchLogs();
+    }
+  }, [userData, activeTab, token]);
+
+  const handleLogin = async (email: string, pass: string) => {
+    setLoading(true);
+    try {
+      const res = await fetch("/api/auth/login", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ email, password: pass })
+      });
+      const data = await res.json();
+      if (res.ok) {
+        localStorage.setItem("token", data.token);
+        setToken(data.token);
+        setUserData(data.user);
+      } else {
+        alert(data.error);
+      }
+    } catch (err) {
+      console.error(err);
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const handleRegister = async (email: string, pass: string, name: string) => {
+    setLoading(true);
+    try {
+      const res = await fetch("/api/auth/register", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ email, password: pass, displayName: name })
+      });
+      const data = await res.json();
+      if (res.ok) {
+        setAuthMode("login");
+        alert("Registration successful! Please login.");
+      } else {
+        alert(data.error);
+      }
+    } catch (err) {
+      console.error(err);
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const handleLogout = () => {
+    localStorage.removeItem("token");
+    setToken(null);
+    setUserData(null);
+    setAllUsers([]);
+    setUserLogs([]);
+  };
+
+  const updateSettings = async (updates: Partial<UserData>) => {
+    try {
+      const res = await fetch("/api/user/config", {
+        method: "POST",
+        headers: { 
+          "Content-Type": "application/json",
+          Authorization: `Bearer ${token}`
+        },
+        body: JSON.stringify(updates)
+      });
+      if (res.ok) {
+        fetchUserData();
+        alert("Settings updated!");
+      }
+    } catch (err) {
+      console.error(err);
+    }
+  };
+
+  const toggleUserStatus = async (targetId: number, field: "verify" | "disable", value: boolean) => {
+    try {
+      const res = await fetch(`/api/admin/users/${targetId}/${field}`, {
+        method: "POST",
+        headers: { 
+          "Content-Type": "application/json",
+          Authorization: `Bearer ${token}`
+        },
+        body: JSON.stringify({ [field === "verify" ? "isVerified" : "isDisabled"]: value })
+      });
+      if (res.ok) {
+        fetchAllUsers();
+      }
+    } catch (err) {
+      console.error(err);
+    }
   };
 
   const triggerAutomation = async () => {
-    if (!userData || !userData.isVerified || userData.isDisabled) return;
+    if (!userData?.isVerified || userData.isDisabled) return;
     try {
-      await fetch("/api/trigger-user", {
+      const res = await fetch("/api/user/trigger", {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ userId: user?.uid, userData })
+        headers: { Authorization: `Bearer ${token}` }
       });
+      if (res.ok) {
+        fetchLogs();
+        alert("Automation triggered!");
+      }
     } catch (err) {
       console.error("Trigger failed", err);
     }
   };
 
   if (loading) return <LoadingScreen />;
-  if (!user) return <LoginScreen onLogin={handleLogin} />;
+  if (!token || !userData) return <AuthScreen mode={authMode} setMode={setAuthMode} onLogin={handleLogin} onRegister={handleRegister} />;
 
   return (
     <div className="min-h-screen bg-[#0a0a0a] text-white font-sans selection:bg-orange-500/30">
@@ -176,7 +264,9 @@ export default function App() {
               <p className="text-sm font-medium">{userData?.displayName}</p>
               <p className="text-[10px] text-white/40 font-mono">{userData?.email}</p>
             </div>
-            <img src={userData?.photoURL} alt="" className="w-10 h-10 rounded-full border border-white/10" />
+            <div className="w-10 h-10 rounded-full border border-white/10 flex items-center justify-center bg-white/5">
+              <UserIcon size={20} className="text-white/40" />
+            </div>
           </div>
         </header>
 
@@ -184,7 +274,7 @@ export default function App() {
           <AnimatePresence mode="wait">
             {activeTab === "dashboard" && (
               <motion.div key="dashboard" initial={{ opacity: 0, y: 20 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0, y: -20 }}>
-                <DashboardView userData={userData} onTrigger={triggerAutomation} />
+                <DashboardView userData={userData} logs={userLogs} onTrigger={triggerAutomation} />
               </motion.div>
             )}
             {activeTab === "settings" && (
@@ -204,7 +294,7 @@ export default function App() {
   );
 }
 
-function DashboardView({ userData, onTrigger }: { userData: UserData | null, onTrigger: () => void }) {
+function DashboardView({ userData, logs, onTrigger }: { userData: UserData | null, logs: LogEntry[], onTrigger: () => void }) {
   if (!userData?.isVerified) {
     return (
       <div className="bg-orange-500/10 border border-orange-500/20 p-12 rounded-3xl text-center">
@@ -264,12 +354,12 @@ function DashboardView({ userData, onTrigger }: { userData: UserData | null, onT
             <h3 className="text-sm font-mono uppercase tracking-widest text-white/40">Activity Logs</h3>
           </div>
           <div className="flex-1 overflow-y-auto p-6 font-mono text-xs space-y-2">
-            {userData.logs?.slice().reverse().map((log, i) => (
-              <div key={i} className="text-white/60 border-l border-white/10 pl-3 py-1">
-                {log}
+            {logs.map((log) => (
+              <div key={log.id} className="text-white/60 border-l border-white/10 pl-3 py-1">
+                {log.message}
               </div>
             ))}
-            {(!userData.logs || userData.logs.length === 0) && (
+            {logs.length === 0 && (
               <div className="h-full flex items-center justify-center text-white/20 italic">
                 No activity recorded yet.
               </div>
@@ -338,7 +428,7 @@ function SettingsView({ userData, onUpdate }: { userData: UserData | null, onUpd
   );
 }
 
-function AdminView({ users, onToggle }: { users: UserData[], onToggle: (uid: string, field: "isVerified" | "isDisabled", val: boolean) => void }) {
+function AdminView({ users, onToggle }: { users: UserData[], onToggle: (id: number, field: "verify" | "disable", val: boolean) => void }) {
   return (
     <div className="bg-white/5 rounded-3xl border border-white/10 overflow-hidden">
       <table className="w-full text-left">
@@ -352,10 +442,12 @@ function AdminView({ users, onToggle }: { users: UserData[], onToggle: (uid: str
         </thead>
         <tbody className="divide-y divide-white/5">
           {users.map(u => (
-            <tr key={u.uid} className="hover:bg-white/5 transition-colors">
+            <tr key={u.id} className="hover:bg-white/5 transition-colors">
               <td className="p-6">
                 <div className="flex items-center gap-3">
-                  <img src={u.photoURL} alt="" className="w-8 h-8 rounded-full" />
+                  <div className="w-8 h-8 rounded-full bg-white/10 flex items-center justify-center">
+                    <UserIcon size={16} className="text-white/40" />
+                  </div>
                   <div>
                     <p className="text-sm font-medium">{u.displayName}</p>
                     <p className="text-xs text-white/40">{u.email}</p>
@@ -370,18 +462,18 @@ function AdminView({ users, onToggle }: { users: UserData[], onToggle: (uid: str
               <td className="p-6">
                 <div className="flex gap-2">
                   {u.isVerified ? <span className="text-green-500 text-xs">Verified</span> : <span className="text-orange-500 text-xs">Pending</span>}
-                  {u.isDisabled && <span className="text-red-500 text-xs">Disabled</span>}
+                  {u.isDisabled ? <span className="text-red-500 text-xs">Disabled</span> : null}
                 </div>
               </td>
               <td className="p-6 text-right space-x-2">
                 <button 
-                  onClick={() => onToggle(u.uid, "isVerified", !u.isVerified)}
+                  onClick={() => onToggle(u.id, "verify", !u.isVerified)}
                   className={`text-xs px-3 py-1.5 rounded-lg border transition-all ${u.isVerified ? 'border-white/10 text-white/40 hover:bg-white/10' : 'border-green-500/50 text-green-500 hover:bg-green-500/10'}`}
                 >
                   {u.isVerified ? "Revoke" : "Verify"}
                 </button>
                 <button 
-                  onClick={() => onToggle(u.uid, "isDisabled", !u.isDisabled)}
+                  onClick={() => onToggle(u.id, "disable", !u.isDisabled)}
                   className={`text-xs px-3 py-1.5 rounded-lg border transition-all ${u.isDisabled ? 'border-green-500/50 text-green-500 hover:bg-green-500/10' : 'border-red-500/50 text-red-500 hover:bg-red-500/10'}`}
                 >
                   {u.isDisabled ? "Enable" : "Disable"}
@@ -409,12 +501,30 @@ function NavButton({ active, icon, onClick }: { active: boolean, icon: any, onCl
 function LoadingScreen() {
   return (
     <div className="min-h-screen bg-[#0a0a0a] flex items-center justify-center text-white font-mono">
-      <RefreshCw className="animate-spin mr-2" /> Authenticating...
+      <RefreshCw className="animate-spin mr-2" /> Loading...
     </div>
   );
 }
 
-function LoginScreen({ onLogin }: { onLogin: () => void }) {
+function AuthScreen({ mode, setMode, onLogin, onRegister }: { 
+  mode: "login" | "register", 
+  setMode: (m: "login" | "register") => void,
+  onLogin: (e: string, p: string) => void,
+  onRegister: (e: string, p: string, n: string) => void
+}) {
+  const [email, setEmail] = useState("");
+  const [password, setPassword] = useState("");
+  const [name, setName] = useState("");
+
+  const handleSubmit = (e: FormEvent) => {
+    e.preventDefault();
+    if (mode === "login") {
+      onLogin(email, password);
+    } else {
+      onRegister(email, password, name);
+    }
+  };
+
   return (
     <div className="min-h-screen bg-[#0a0a0a] flex items-center justify-center p-6">
       <div className="max-w-md w-full text-center space-y-8">
@@ -425,13 +535,68 @@ function LoginScreen({ onLogin }: { onLogin: () => void }) {
           <h1 className="text-4xl font-bold tracking-tighter mb-2">SocialStream AI</h1>
           <p className="text-white/40">The ultimate social media automation engine.</p>
         </div>
-        <button 
-          onClick={onLogin}
-          className="w-full py-4 bg-white text-black font-bold rounded-2xl hover:bg-orange-500 hover:text-white transition-all flex items-center justify-center gap-3"
-        >
-          <img src="https://www.google.com/favicon.ico" className="w-5 h-5" alt="" />
-          Continue with Google
-        </button>
+
+        <form onSubmit={handleSubmit} className="space-y-4 text-left">
+          {mode === "register" && (
+            <div className="space-y-2">
+              <label className="text-xs font-mono uppercase tracking-widest text-white/40 ml-2">Display Name</label>
+              <div className="relative">
+                <UserIcon className="absolute left-4 top-1/2 -translate-y-1/2 text-white/20" size={18} />
+                <input 
+                  type="text" 
+                  value={name}
+                  onChange={(e) => setName(e.target.value)}
+                  className="w-full bg-white/5 border border-white/10 rounded-2xl p-4 pl-12 focus:outline-none focus:border-orange-500 transition-colors"
+                  placeholder="John Doe"
+                  required
+                />
+              </div>
+            </div>
+          )}
+          <div className="space-y-2">
+            <label className="text-xs font-mono uppercase tracking-widest text-white/40 ml-2">Email Address</label>
+            <div className="relative">
+              <Mail className="absolute left-4 top-1/2 -translate-y-1/2 text-white/20" size={18} />
+              <input 
+                type="email" 
+                value={email}
+                onChange={(e) => setEmail(e.target.value)}
+                className="w-full bg-white/5 border border-white/10 rounded-2xl p-4 pl-12 focus:outline-none focus:border-orange-500 transition-colors"
+                placeholder="name@example.com"
+                required
+              />
+            </div>
+          </div>
+          <div className="space-y-2">
+            <label className="text-xs font-mono uppercase tracking-widest text-white/40 ml-2">Password</label>
+            <div className="relative">
+              <Lock className="absolute left-4 top-1/2 -translate-y-1/2 text-white/20" size={18} />
+              <input 
+                type="password" 
+                value={password}
+                onChange={(e) => setPassword(e.target.value)}
+                className="w-full bg-white/5 border border-white/10 rounded-2xl p-4 pl-12 focus:outline-none focus:border-orange-500 transition-colors"
+                placeholder="••••••••"
+                required
+              />
+            </div>
+          </div>
+          <button 
+            type="submit"
+            className="w-full py-4 bg-white text-black font-bold rounded-2xl hover:bg-orange-500 hover:text-white transition-all flex items-center justify-center gap-3 mt-4"
+          >
+            {mode === "login" ? "Sign In" : "Create Account"}
+          </button>
+        </form>
+
+        <div className="text-sm text-white/40">
+          {mode === "login" ? (
+            <p>Don't have an account? <button onClick={() => setMode("register")} className="text-orange-500 hover:underline">Register here</button></p>
+          ) : (
+            <p>Already have an account? <button onClick={() => setMode("login")} className="text-orange-500 hover:underline">Login here</button></p>
+          )}
+        </div>
+
         <p className="text-[10px] text-white/20 font-mono uppercase tracking-[0.2em]">Enterprise Grade Security</p>
       </div>
     </div>
