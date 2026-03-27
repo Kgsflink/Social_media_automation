@@ -1,0 +1,35 @@
+{
+  "entities": {
+    "users": {
+      "title": "User",
+      "description": "User profile and automation settings",
+      "type": "object",
+      "properties": {
+        "uid": { "type": "string" },
+        "email": { "type": "string", "format": "email" },
+        "displayName": { "type": "string" },
+        "photoURL": { "type": "string" },
+        "isVerified": { "type": "boolean", "description": "Admin verification status" },
+        "isDisabled": { "type": "boolean", "description": "Admin disable status" },
+        "role": { "type": "string", "enum": ["user", "admin"] },
+        "githubToken": { "type": "string" },
+        "youtubeClientId": { "type": "string" },
+        "youtubeClientSecret": { "type": "string" },
+        "metaAccessToken": { "type": "string" },
+        "reelsPerBatch": { "type": "number", "description": "Number of reels to post per cycle (2, 3, 4, etc.)" },
+        "uploadSchedule": { "type": "string", "description": "Cron-style schedule or specific time" },
+        "postedVideos": { "type": "array", "items": { "type": "string" } },
+        "logs": { "type": "array", "items": { "type": "string" } },
+        "lastRun": { "type": "string" },
+        "nextRun": { "type": "string" }
+      },
+      "required": ["uid", "email", "role"]
+    }
+  },
+  "firestore": {
+    "/users/{userId}": {
+      "schema": "users",
+      "description": "User documents containing profile and automation settings"
+    }
+  }
+}

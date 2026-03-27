@@ -1,0 +1,77 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    
+    // ===============================================================
+    // Assumed Data Model
+    // ===============================================================
+    //
+    // Collection: users
+    // Document ID: {userId} (Firebase Auth UID)
+    // Fields:
+    //   - uid: string (required)
+    //   - email: string (required, email format)
+    //   - displayName: string
+    //   - photoURL: string
+    //   - isVerified: boolean (default false)
+    //   - isDisabled: boolean (default false)
+    //   - role: string ("user" or "admin")
+    //   - githubToken: string (optional)
+    //   - reelsPerBatch: number (optional)
+    //   - uploadSchedule: string (optional)
+    //   - postedVideos: list (optional)
+    //   - logs: list (optional)
+    //
+    // ===============================================================
+
+    // Helper Functions
+    function isAuthenticated() {
+      return request.auth != null;
+    }
+
+    function isOwner(userId) {
+      return isAuthenticated() && request.auth.uid == userId;
+    }
+
+    function isAdmin() {
+      return isAuthenticated() && 
+        (get(/databases/$(database)/documents/users/$(request.auth.uid)).data.role == 'admin' ||
+         request.auth.token.email == "gopig4974@gmail.com" ||
+         request.auth.token.email == "krishna_tech_guru_30oct@gmail.com");
+    }
+
+    function isValidUser(data) {
+      return data.uid is string &&
+             data.email is string &&
+             data.role in ['user', 'admin'] &&
+             (!('reelsPerBatch' in data) || data.reelsPerBatch is number) &&
+             (!('uploadSchedule' in data) || data.uploadSchedule is string);
+    }
+
+    match /users/{userId} {
+      // Allow users to read their own profile, admins can read all
+      allow read: if isOwner(userId) || isAdmin();
+      
+      // Allow creation if the user is creating their own profile
+      allow create: if isOwner(userId) && 
+                      isValidUser(request.resource.data) &&
+                      request.resource.data.isVerified == false &&
+                      request.resource.data.isDisabled == false &&
+                      (request.resource.data.role == 'user' || isAdmin());
+
+      // Allow updates
+      allow update: if (isOwner(userId) && 
+                        isValidUser(request.resource.data) &&
+                        // Users cannot change their own verification/disabled status or role
+                        request.resource.data.isVerified == resource.data.isVerified &&
+                        request.resource.data.isDisabled == resource.data.isDisabled &&
+                        request.resource.data.role == resource.data.role) ||
+                       (isAdmin() && isValidUser(request.resource.data));
+    }
+
+    // Default deny
+    match /{document=**} {
+      allow read, write: if false;
+    }
+  }
+}

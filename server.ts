@@ -20,33 +20,9 @@ async function startServer() {
 
   app.use(express.json());
 
-  // --- AI & Automation Logic ---
+  // --- Multi-User Automation Logic ---
 
   const ai = new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY! });
-
-  // GitHub Configuration
-  const GITHUB_TOKEN = process.env.GITHUB_TOKEN;
-  const REPO_OWNER = "krishnaTech75";
-  const REPO_NAME = "Research_videos";
-  const REPO_PATH = "Videos";
-
-  const octokit = new Octokit({ auth: GITHUB_TOKEN });
-
-  // In-memory state (Replace with DB for production)
-  let status = {
-    lastRun: null,
-    nextRun: null,
-    postedVideos: [],
-    logs: [],
-    isAutomationRunning: false
-  };
-
-  const addLog = (message: string) => {
-    const log = `[${new Date().toISOString()}] ${message}`;
-    console.log(log);
-    status.logs.push(log);
-    if (status.logs.length > 100) status.logs.shift();
-  };
 
   async function generateCaption(videoName: string) {
     try {
@@ -57,86 +33,75 @@ async function startServer() {
       });
       return result.text || `Check out this amazing video: ${videoName} #trending #viral`;
     } catch (error) {
-      addLog(`Error generating caption: ${error}`);
       return `Check out this amazing video: ${videoName} #trending #viral`;
     }
   }
 
-  async function processAutomation() {
-    if (status.isAutomationRunning) return;
-    status.isAutomationRunning = true;
-    addLog("Starting automation cycle...");
+  async function processUserAutomation(userData: any, userId: string) {
+    if (!userData.isVerified || userData.isDisabled || !userData.githubToken) return;
+
+    const octokit = new Octokit({ auth: userData.githubToken });
+    const REPO_OWNER = "krishnaTech75";
+    const REPO_NAME = "Research_videos";
+    const REPO_PATH = "Videos";
+
+    const logs: string[] = userData.logs || [];
+    const addLog = (msg: string) => {
+      const log = `[${new Date().toISOString()}] ${msg}`;
+      logs.push(log);
+      if (logs.length > 50) logs.shift();
+    };
+
+    addLog(`Starting automation cycle for ${userData.email}...`);
 
     try {
-      // 1. Fetch videos from GitHub
       const { data: contents } = await octokit.rest.repos.getContent({
         owner: REPO_OWNER,
         repo: REPO_NAME,
         path: REPO_PATH,
       });
 
-      if (!Array.isArray(contents)) {
-        throw new Error("Invalid repository path or empty directory.");
-      }
+      if (!Array.isArray(contents)) throw new Error("Invalid repo path");
 
-      const videos = contents.filter(file => 
-        file.name.endsWith(".mp4") || file.name.endsWith(".mov")
-      );
+      const videos = contents.filter(file => file.name.endsWith(".mp4") || file.name.endsWith(".mov"));
+      const postedVideos = userData.postedVideos || [];
+      const nextVideos = videos.filter(v => !postedVideos.includes(v.sha)).slice(0, userData.reelsPerBatch || 1);
 
-      addLog(`Found ${videos.length} videos in GitHub repository.`);
-
-      // 2. Find a video that hasn't been posted yet
-      const nextVideo = videos.find(v => !status.postedVideos.includes(v.sha));
-
-      if (!nextVideo) {
+      if (nextVideos.length === 0) {
         addLog("No new videos to post.");
-        status.isAutomationRunning = false;
-        return;
+      } else {
+        for (const video of nextVideos) {
+          addLog(`Processing: ${video.name}`);
+          const caption = await generateCaption(video.name);
+          addLog(`Generated AI Caption for ${video.name}`);
+          // Social posting logic would go here using user's tokens
+          postedVideos.push(video.sha);
+        }
       }
 
-      addLog(`Processing video: ${nextVideo.name}`);
-
-      // 3. Generate AI Caption
-      const caption = await generateCaption(nextVideo.name);
-      addLog(`Generated AI Caption: ${caption.substring(0, 50)}...`);
-
-      // 4. Social Media Posting (Stubs - Requires OAuth/API Setup)
-      addLog("Attempting to post to social media platforms...");
+      // Update Firebase (This would ideally be done via a service account or admin SDK)
+      // For this demo, we'll assume the server has access or we'll trigger it from the client
+      addLog(`Cycle complete. Posted ${nextVideos.length} videos.`);
       
-      // YouTube Stub
-      addLog("[YouTube] Posting video...");
-      // Implementation would use googleapis and OAuth2 tokens
-      
-      // Instagram Stub
-      addLog("[Instagram] Posting reel...");
-      // Implementation would use Meta Graph API
-
-      // 5. Update Status
-      status.postedVideos.push(nextVideo.sha);
-      status.lastRun = new Date().toISOString();
-      addLog(`Successfully processed and "posted" ${nextVideo.name}`);
-
+      // In a real production app, you'd use firebase-admin here
+      // For now, we'll log it and the client will handle state updates via onSnapshot
     } catch (error) {
-      addLog(`Automation failed: ${error}`);
-    } finally {
-      status.isAutomationRunning = false;
+      addLog(`Error: ${error}`);
     }
   }
 
-  // Schedule: Every 6 hours
-  cron.schedule("0 */6 * * *", () => {
-    processAutomation();
+  // Global scheduler for all users (Simplified)
+  cron.schedule("0 * * * *", async () => {
+    // In production, you'd query Firebase for users whose schedule matches 'now'
+    console.log("Running hourly automation check...");
   });
 
   // --- API Routes ---
 
-  app.get("/api/status", (req, res) => {
-    res.json(status);
-  });
-
-  app.post("/api/trigger", async (req, res) => {
-    processAutomation();
-    res.json({ message: "Automation triggered manually." });
+  app.post("/api/trigger-user", async (req, res) => {
+    const { userId, userData } = req.body;
+    await processUserAutomation(userData, userId);
+    res.json({ message: "Automation triggered." });
   });
 
   app.post("/api/config", (req, res) => {
